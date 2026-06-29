@@ -1,0 +1,3 @@
+[submodule "firmware/ymir"]
+	path = firmware/ymir
+	url = git@github.com:posrp/ymir
