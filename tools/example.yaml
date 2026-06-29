@@ -1,0 +1,30 @@
+window: 60.0
+log:    null
+
+# Each board is keyed by its USB serial (case-insensitive, as reported by
+# `python3 -c "from serial.tools import list_ports; [print(p.serial_number) for p in list_ports.comports() if p.vid == 0x0483 and p.pid == 0x4B56]"`).
+# Boards whose serial is not listed here are skipped at startup.
+boards:
+  37A436773235:
+    channels:
+      - channel:       ADC_IN0
+        name:          v_test_1
+        scale:         "3.3 / (2^12 - 1)"
+        offset:        0.0
+        unit:          V
+        sampling_time: 0
+      - channel:       ADC_IN1
+        name:          adc1
+        scale:         "3.3 / (2^12 - 1)"
+        offset:        0.0
+        unit:          V
+        sampling_time: 0
+
+  376136773235:
+    channels:
+      - channel:       ADC_IN0
+        name:          v_test_2
+        scale:         "3.3 / (2^12 - 1)"
+        offset:        0.0
+        unit:          V
+        sampling_time: 0

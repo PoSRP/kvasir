@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VENV="$ROOT/.venv"
+
+if [[ ! -d "$VENV" ]]; then
+    python3 -m venv --system-site-packages "$VENV"
+fi
+
+"$VENV/bin/pip" install --quiet -r "$ROOT/tools/requirements.txt"
+
+cd "$ROOT"
+export LD_LIBRARY_PATH="${NIX_LD_LIBRARY_PATH:-}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec "$VENV/bin/python" -m tools.monitor "$@"

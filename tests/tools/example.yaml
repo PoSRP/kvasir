@@ -1,0 +1,18 @@
+window: 2.0
+log:    null
+
+boards:
+  ABC123:
+    channels:
+      - channel:       ADC_IN0
+        name:          voltage
+        scale:         0.000806
+        offset:        0.0
+        unit:          V
+        sampling_time: 0
+      - channel:       ADC_IN1
+        name:          current
+        scale:         0.004030
+        offset:        -0.5
+        unit:          A
+        sampling_time: 0
