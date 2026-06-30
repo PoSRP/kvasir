@@ -10,7 +10,7 @@ on:
 
 jobs:
   test:
-    runs-on: selfhosted-stm32-sensor-capture
+    runs-on: selfhosted-kvasir
     steps:
       - run: sudo renice 10 -p $BASHPID
       - uses: actions/checkout@v6
