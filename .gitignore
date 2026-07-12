@@ -1,0 +1,27 @@
+# Build output
+build/
+**/build/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+
+# Firmware artifacts
+*.elf
+*.bin
+*.hex
+*.map
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo

@@ -1,0 +1,29 @@
+{
+    "version": 3,
+    "configurePresets": [
+        {
+            "name": "slot-a",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/slot-a",
+            "toolchainFile": "${sourceDir}/cmake/gcc-arm-none-eabi.cmake",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "SLOT_LINKER_SCRIPT": "${sourceDir}/ymir/firmware/linker/app_slot_a.ld"
+            }
+        },
+        {
+            "name": "slot-b",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/slot-b",
+            "toolchainFile": "${sourceDir}/cmake/gcc-arm-none-eabi.cmake",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "SLOT_LINKER_SCRIPT": "${sourceDir}/ymir/firmware/linker/app_slot_b.ld"
+            }
+        }
+    ],
+    "buildPresets": [
+        { "name": "slot-a", "configurePreset": "slot-a" },
+        { "name": "slot-b", "configurePreset": "slot-b" }
+    ]
+}

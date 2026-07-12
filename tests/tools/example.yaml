@@ -1,0 +1,15 @@
+window: 2.0
+log:    null
+
+boards:
+  ABC123:
+    channels:
+      - channel:       ADC_IN0
+        name:          voltage
+        unit:          V
+        sampling_time: 0
+      - channel:       ADC_IN1
+        name:          current
+        formula:       "v * 5 - 0.5"
+        unit:          A
+        sampling_time: 0

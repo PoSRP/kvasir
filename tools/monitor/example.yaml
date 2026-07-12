@@ -1,0 +1,32 @@
+window: 60.0
+log:    null
+
+# Each board is keyed by its USB serial (case-insensitive, as reported by
+# `python3 -c "from serial.tools import list_ports; [print(p.serial_number) for p in list_ports.comports() if p.vid == 0x0483 and p.pid == 0x4B56]"`).
+# Boards whose serial is not listed here are skipped at startup.
+#
+# Every channel is converted raw counts -> volts by default (see ADC_VREF /
+# ADC_MAX_CODE in tools/monitor/session.py). Add `formula` for anything
+# nonlinear; `v` in the expression is the value in volts.
+boards:
+  '37A436773235':
+    channels:
+      - channel:       ADC_IN0
+        name:          v_test_1
+        sampling_time: 0
+      - channel:       ADC_IN1
+        name:          adc1
+        sampling_time: 0
+
+      # 50K NTC (beta=3950, R0=50K@25C) in a 50K/NTC divider to 3.3V.
+      - channel:       ADC_IN2
+        name:          ntc_1
+        formula:       "1/(1/298.15 + log(50000*v/(3.3-v)/50000)/3950) - 273.15"
+        unit:          C
+        sampling_time: 0
+
+  '376136773235':
+    channels:
+      - channel:       ADC_IN0
+        name:          v_test_2
+        sampling_time: 0
