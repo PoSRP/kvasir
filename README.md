@@ -18,6 +18,8 @@ STM32F411CEU6 (WeAct Black Pill). Ten ADC channels, fixed pinout. Only the
 channels named in the host config are enabled, so the scan rate is spent on
 the ones we actually want.
 
+<div align="center">
+
 | ID | Name    | Pin |
 |----|---------|-----|
 | 0  | ADC_IN0 | PA0 |
@@ -30,6 +32,8 @@ the ones we actually want.
 | 7  | ADC_IN7 | PA7 |
 | 8  | ADC_IN8 | PB0 |
 | 9  | ADC_IN9 | PB1 |
+
+</div>
 
 Multiple boards can run in parallel on the same host.
 The monitor tool maps each board by USB serial number.
@@ -46,20 +50,28 @@ Every frame, both directions:
 
 ### Device -> Host
 
+<div align="center">
+
 | Type   | Name        | Payload                                                                |
 |--------|-------------|------------------------------------------------------------------------|
 | `0x01` | STREAM_DATA | `ch_id(1) seq(2BE) count(2BE) samples[](uint16BE)`                     |
 | `0x10` | ACK         | `cmd_type(1) status(1)`                                                |
 
+</div>
+
 - ACK status: `0x00` OK, `0x01` ERROR.
 
 ### Host -> Device
+
+<div align="center">
 
 | Type   | Name    | Payload                                        |
 |--------|---------|------------------------------------------------|
 | `0x80` | CONFIG  | `[ch_id(1) cfg_len(1) enabled(1) sampling_time(1)]...` |
 | `0x81` | START   | (empty)                                        |
 | `0x82` | STOP    | (empty)                                        |
+
+</div>
 
 `sampling_time` is an ADC SMPR enum 0-7 (3 / 15 / 28 / 56 / 84 / 112 / 144 / 480
 cycles) and is set per channel.
@@ -99,7 +111,7 @@ This project is set up to build A and B images and include a USB bootloader.
 For the complexity we have, it's a bit silly maybe, but I wanted to test my
 bootloader in a real project as well, so why not.
 
-```sh
+```text
 Usage: ./build.sh [command]
 
 Application firmware (slot images for the ymir bootloader):
