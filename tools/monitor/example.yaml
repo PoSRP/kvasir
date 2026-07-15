@@ -1,4 +1,4 @@
-window: 60.0
+window: 15.0
 log:    null
 
 # Each board is keyed by its USB serial (case-insensitive, as reported by
@@ -11,15 +11,12 @@ log:    null
 boards:
   '37A436773235':
     channels:
-      - channel:       ADC_IN0
-        name:          v_test_1
-        sampling_time: 0
-      - channel:       ADC_IN1
-        name:          adc1
+      - channel:       ADC_IN6
+        name:          v1
         sampling_time: 0
 
       # 50K NTC (beta=3950, R0=50K@25C) in a 50K/NTC divider to 3.3V.
-      - channel:       ADC_IN2
+      - channel:       ADC_IN7
         name:          ntc_1
         formula:       "1/(1/298.15 + log(50000*v/(3.3-v)/50000)/3950) - 273.15"
         unit:          C
@@ -27,6 +24,10 @@ boards:
 
   '376136773235':
     channels:
-      - channel:       ADC_IN0
-        name:          v_test_2
-        sampling_time: 0
+      - channel:       ADC_IN6
+        name:          v3
+        sampling_time: 7
+
+      - channel:       ADC_IN7
+        name:          v4
+        sampling_time: 7
