@@ -77,7 +77,7 @@ class Channel:
         v = raw * (ADC_VREF / ADC_MAX_CODE)
         if self._code is None:
             return v
-        return eval(self._code, {'__builtins__': {}}, {'v': v, **_FORMULA_NAMES})
+        return eval(self._code, {'v': v, **_FORMULA_NAMES})
 
 
 def _make_frame(type_byte: int, payload: bytes) -> bytes:

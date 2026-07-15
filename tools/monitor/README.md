@@ -4,6 +4,14 @@ Real-time monitor and HDF5 logger for one or more kvasir boards. Driven by a
 YAML config that maps each board (by USB serial) to the channels it should
 capture.
 
+<p align="center">
+  <img src="screenshot-0.png" width="49%">
+  <img src="screenshot-1.png" width="49%">
+  <br>
+  <em>Example with resistor divider as input</em>
+</p>
+
+
 Run it:
 
 ```
