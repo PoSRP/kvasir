@@ -2,26 +2,49 @@
 """Real-time monitor and data logger for kvasir sensor capture boards.
 
 Usage:
-    python3 -m tools.monitor
-    python3 -m tools.monitor example.yaml
-    python3 -m tools.monitor example.yaml --output run.h5
-    python3 -m tools.monitor example.yaml --no-gui --output run.h5
+    python3 tools/monitor/monitor.py
+    python3 tools/monitor/monitor.py example.yaml
+    python3 tools/monitor/monitor.py example.yaml --output run.h5
+    python3 tools/monitor/monitor.py example.yaml --no-gui --output run.h5
 """
 from __future__ import annotations
 import argparse
+import ast
+import math
+import struct
 import sys
 import threading
 import time
 from dataclasses import dataclass, field
+from enum import IntEnum
 from pathlib import Path
+from typing import Optional
 import numpy as np
 import serial
+import yaml
 from serial.tools import list_ports
 
-from .frame_parser import StreamDataFrame
-from .session import Session, Channel, compute_sample_rate
-from .protocol import USB_VID, USB_PID
-from .config import load as load_config, Config
+
+USB_VID = 0x0483
+USB_PID = 0x4B56
+
+MAGIC = 0xAD
+
+ADC_CLK_HZ   = 24_000_000
+_SMPR_CYCLES = (3, 15, 28, 56, 84, 112, 144, 480)
+ADC_VREF     = 3.3
+ADC_MAX_CODE = 4095
+
+_FORMULA_NAMES: dict[str, object] = {
+    n: getattr(np, n) for n in (
+        'log', 'log10', 'log2', 'exp', 'sqrt', 'sin', 'cos', 'tan',
+        'arcsin', 'arccos', 'arctan', 'arctan2', 'abs', 'sign',
+        'floor', 'ceil', 'clip', 'power', 'minimum', 'maximum',
+        'pi', 'e',
+    )
+}
+
+NUM_CH = 10  # kvasir board has ADC_IN0..ADC_IN9
 
 DISPLAY_POINTS = 2000
 LOG_CHUNK      = 65536
@@ -29,12 +52,141 @@ LOG_CHUNK      = 65536
 DEFAULT_CONFIG = Path(__file__).parent / 'example.yaml'
 
 
-def short_tag(serial: str) -> str:
+class FrameType(IntEnum):
+    # Device -> host
+    STREAM_DATA = 0x01
+    ACK         = 0x10
+    # Host -> device
+    CONFIG      = 0x80
+    START       = 0x81
+    STOP        = 0x82
+
+
+class AckStatus(IntEnum):
+    OK    = 0x00
+    ERROR = 0x01
+
+
+@dataclass
+class StreamDataFrame:
+    channel_id: int
+    seq:        int
+    samples:    list[int]
+
+
+@dataclass
+class AckFrame:
+    cmd_type: int
+    status:   int
+
+
+AnyFrame = StreamDataFrame | AckFrame
+
+
+@dataclass
+class Channel:
+    channel_id:    int
+    name:          str
+    unit:          str              = 'V'
+    y_min:         Optional[float]  = None
+    y_max:         Optional[float]  = None
+    sampling_time: int              = 0
+    formula:       Optional[str]    = None
+    _code:         object           = field(default=None, init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if self.formula is not None:
+            self._code = _compile_formula(self.name, self.formula)
+
+    def convert(self, raw):
+        v = raw * (ADC_VREF / ADC_MAX_CODE)
+        if self._code is None:
+            return v
+        with np.errstate(divide='ignore', invalid='ignore'):
+            return eval(self._code, {'v': v, **_FORMULA_NAMES})
+
+
+@dataclass
+class Config:
+    # Insertion order is preserved; the monitor lays out plot rows in this order.
+    boards: dict[str, list[Channel]] = field(default_factory=dict)
+    log:    Optional[str]            = None
+    window: float                    = 5.0  # seconds of history shown in the plot
+
+
+@dataclass
+class _Board:
+    """Per-board runtime state. One per entry in config.boards."""
+    serial:     str  # full USB serial (uppercased)
+    tag:        str  # short tag for UI / log dataset prefix
+    channels:   list[Channel]
+    port_path:  str | None                    = None  # latest discovered device path
+    port:       serial.Serial | None          = None
+    session:    Session | None                = None
+    connecting: bool                          = False
+    ch_id_map:  dict[int, Channel]            = field(default_factory=dict)
+    buffers:    dict[str, _DisplayBuffer]     = field(default_factory=dict)
+    last_drops: int                           = 0  # last-observed session drop count, for delta detection
+
+
+def _make_frame(type_byte: int, payload: bytes) -> bytes:
+    return bytes([MAGIC, type_byte, len(payload) >> 8, len(payload) & 0xFF]) + payload
+
+
+def compute_sample_rate(sampling_times: list[int]) -> int:
+    """Per-channel sample rate when the ADC scans the given channels in series.
+
+    All channels share the same rate: total scan cycles = sum over channels of
+    (sampling + 12 conversion) cycles; per-channel rate = ADC_CLK / total.
+    Returns 0 when no channels are enabled."""
+    if not sampling_times:
+        return 0
+    total = sum(_SMPR_CYCLES[s] + 12 for s in sampling_times)
+    return ADC_CLK_HZ // total
+
+
+def _compile_formula(channel_name: str, source: str):
+    """Parse+compile the formula. Rejects unknown names at load time so a bad
+    expression fails on config load, not mid-stream."""
+    try:
+        tree = ast.parse(source, mode='eval')
+    except SyntaxError as e:
+        raise ValueError(f"channel '{channel_name}': invalid formula: {e}") from e
+    used    = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+    unknown = used - _FORMULA_NAMES.keys() - {'v'}
+    if unknown:
+        raise ValueError(
+            f"channel '{channel_name}': formula uses unknown names "
+            f"{sorted(unknown)}. Available: v, {', '.join(sorted(_FORMULA_NAMES))}"
+        )
+    return compile(tree, f'<formula:{channel_name}>', 'eval')
+
+
+def _num(v, default=None):
+    if v is None:
+        return default
+    if isinstance(v, (int, float)):
+        return float(v)
+    return float(eval(str(v).replace('^', '**'), {'__builtins__': {}}, vars(math)))
+
+
+def _channel_name_to_id(name: str) -> int:
+    prefix = 'ADC_IN'
+    if name.startswith(prefix):
+        rest = name[len(prefix):]
+        if rest.isdigit():
+            n = int(rest)
+            if 0 <= n < NUM_CH:
+                return n
+    raise ValueError(f"channel '{name}' must be one of ADC_IN0..ADC_IN{NUM_CH - 1}")
+
+
+def short_tag(serial_str: str) -> str:
     """Single-serial fallback: last 4 chars uppercased. For multi-board
     disambiguation use compute_tags() -- STM32 unique IDs often share their
     LSBs across siblings from the same lot, so 'last 4 chars' is not unique
     in the general case."""
-    return serial[-4:].upper()
+    return serial_str[-4:].upper()
 
 
 def compute_tags(serials: list[str]) -> dict[str, str]:
@@ -64,6 +216,190 @@ def discover_kvasir_ports() -> dict[str, str]:
         if p.vid == USB_VID and p.pid == USB_PID and p.serial_number:
             out[p.serial_number.upper()] = p.device
     return out
+
+
+def _dataset_name(tag: str, name: str) -> str:
+    return f'{tag}_{name}'
+
+
+def _parse_channels(ch_list: list, where: str) -> list[Channel]:
+    channels = [
+        Channel(
+            channel_id=_channel_name_to_id(str(ch['channel'])),
+            name=str(ch.get('name', ch['channel'])),
+            unit=str(ch.get('unit', 'V')),
+            y_min=_num(ch.get('y_min')),
+            y_max=_num(ch.get('y_max')),
+            sampling_time=int(ch.get('sampling_time', 0)),
+            formula=(str(ch['formula']) if ch.get('formula') else None),
+        )
+        for ch in ch_list
+    ]
+    for ch in channels:
+        if not 0 <= ch.sampling_time <= 7:
+            raise ValueError(
+                f"{where}: channel '{ch.name}' sampling_time {ch.sampling_time} "
+                f"out of range (must be 0-7; maps to 3/15/28/56/84/112/144/480 ADC cycles)"
+            )
+    seen: set[str] = set()
+    for ch in channels:
+        if ch.name in seen:
+            raise ValueError(f"{where}: duplicate channel name '{ch.name}'")
+        seen.add(ch.name)
+    return channels
+
+
+def load(path: str) -> Config:
+    with open(path) as f:
+        data = yaml.safe_load(f) or {}
+    raw_boards = data.get('boards') or {}
+    if not isinstance(raw_boards, dict):
+        raise ValueError("'boards' must be a mapping of USB serial -> {channels: [...]}")
+    boards: dict[str, list[Channel]] = {}
+    for serial_key, entry in raw_boards.items():
+        key = str(serial_key).upper()
+        if key in boards:
+            raise ValueError(f"duplicate board serial '{key}'")
+        ch_list = (entry or {}).get('channels', [])
+        boards[key] = _parse_channels(ch_list, f"board {key}")
+    return Config(
+        boards=boards,
+        log=data.get('log'),
+        window=float(data.get('window', 5.0)),
+    )
+
+
+class FrameParser:
+    def __init__(self) -> None:
+        self._buf:      bytearray      = bytearray()
+        self._last_seq: dict[int, int] = {}
+        self.seq_drops: int            = 0
+
+    def feed(self, data: bytes | bytearray) -> list[AnyFrame]:
+        self._buf += data
+        frames: list[AnyFrame] = []
+        while (f := self._try_parse()) is not None:
+            frames.append(f)
+        return frames
+
+    def _try_parse(self) -> AnyFrame | None:
+        while True:
+            # Resync: drop bytes until 0xAD or buffer empty
+            while self._buf and self._buf[0] != MAGIC:
+                del self._buf[0]
+
+            if len(self._buf) < 4:
+                return None
+
+            type_byte   = self._buf[1]
+            payload_len = (self._buf[2] << 8) | self._buf[3]
+            frame_size  = 4 + payload_len
+
+            if len(self._buf) < frame_size:
+                return None
+
+            payload = bytes(self._buf[4:frame_size])
+            del self._buf[:frame_size]
+
+            result = self._decode(type_byte, payload)
+            if result is not None:
+                return result
+
+    def _decode(self, type_byte: int, payload: bytes) -> AnyFrame | None:
+        match type_byte:
+            case FrameType.STREAM_DATA:
+                return self._decode_stream_data(payload)
+            case FrameType.ACK:
+                return self._decode_ack(payload)
+            case _:
+                return None
+
+    def _decode_stream_data(self, payload: bytes) -> StreamDataFrame | None:
+        if len(payload) < 5:
+            return None
+        ch_id = payload[0]
+        seq   = (payload[1] << 8) | payload[2]
+        count = (payload[3] << 8) | payload[4]
+        if len(payload) != 5 + count * 2:
+            return None
+        samples = [
+            (payload[5 + i * 2] << 8) | payload[5 + i * 2 + 1]
+            for i in range(count)
+        ]
+        last = self._last_seq.get(ch_id)
+        if last is not None:
+            expected = (last + 1) & 0xFFFF
+            if seq != expected:
+                self.seq_drops += (seq - expected) & 0xFFFF
+        self._last_seq[ch_id] = seq
+        return StreamDataFrame(channel_id=ch_id, seq=seq, samples=samples)
+
+    def _decode_ack(self, payload: bytes) -> AckFrame | None:
+        if len(payload) < 2:
+            return None
+        return AckFrame(cmd_type=payload[0], status=payload[1])
+
+
+class Session:
+    """Manages the connect -> CONFIG -> START -> stream -> STOP lifecycle.
+
+    port: any object with read(n)->bytes, write(bytes), and in_waiting property.
+    Accepts a real serial.Serial or a FakePort for testing.
+    """
+
+    def __init__(self, port, channels: list[Channel]) -> None:
+        self._port     = port
+        self._channels = channels
+        self._parser   = FrameParser()
+        self._pending: list[AnyFrame] = []
+
+    def connect(self, timeout: float = 5.0) -> None:
+        """STOP -> ACK -> CONFIG -> ACK -> START -> ACK."""
+        deadline = time.monotonic() + timeout
+        # STOP forces the firmware into UNCONFIGURED regardless of prior state.
+        self._port.write(_make_frame(FrameType.STOP, b""))
+        self._wait_for_ack(FrameType.STOP, deadline)
+
+        self._port.write(_make_frame(FrameType.CONFIG, self._build_config_payload()))
+        self._wait_for_ack(FrameType.CONFIG, deadline)
+
+        self._port.write(_make_frame(FrameType.START, b""))
+        self._wait_for_ack(FrameType.START, deadline)
+
+    def feed(self, data: bytes) -> list[StreamDataFrame]:
+        """Parse bytes from the device, return only stream data frames."""
+        return [f for f in self._parser.feed(data) if isinstance(f, StreamDataFrame)]
+
+    def stop(self) -> None:
+        self._port.write(_make_frame(FrameType.STOP, b""))
+
+    def close(self) -> None:
+        if hasattr(self._port, 'close'):
+            self._port.close()
+
+    def _recv_frame(self, deadline: float | None) -> AnyFrame:
+        while True:
+            if self._pending:
+                return self._pending.pop(0)
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError('session connect timed out')
+            n = self._port.in_waiting or 1
+            data = self._port.read(n)
+            if data:
+                self._pending.extend(self._parser.feed(data))
+
+    def _wait_for_ack(self, cmd_type: int, deadline: float | None) -> AckFrame:
+        while True:
+            f = self._recv_frame(deadline)
+            if isinstance(f, AckFrame) and f.cmd_type == int(cmd_type):
+                return f
+
+    def _build_config_payload(self) -> bytes:
+        payload = b""
+        for ch in self._channels:
+            cfg = struct.pack(">BB", 1, ch.sampling_time)
+            payload += bytes([ch.channel_id, len(cfg)]) + cfg
+        return payload
 
 
 class _DisplayBuffer:
@@ -121,24 +457,6 @@ class _DisplayBuffer:
         return float(valid.min()), float(valid.max())
 
 
-@dataclass
-class _Board:
-    """Per-board runtime state. One per entry in config.boards."""
-    serial:     str  # full USB serial (uppercased)
-    tag:        str  # short tag for UI / log dataset prefix
-    channels:   list[Channel]
-    port_path:  str | None                    = None  # latest discovered device path
-    port:       serial.Serial | None          = None
-    session:    Session | None                = None
-    connecting: bool                          = False
-    ch_id_map:  dict[int, Channel]            = field(default_factory=dict)
-    buffers:    dict[str, _DisplayBuffer]     = field(default_factory=dict)
-
-
-def _dataset_name(tag: str, name: str) -> str:
-    return f'{tag}_{name}'
-
-
 class Monitor:
     """Multi-board monitor. Discovers kvasir devices by USB VID/PID + serial,
     spawns one Session per configured board, and renders all channels in one window."""
@@ -150,8 +468,8 @@ class Monitor:
         self._log_format = log_format
         tags         = compute_tags(list(config.boards.keys()))
         self._boards: dict[str, _Board] = {
-            serial: _Board(serial=serial, tag=tags[serial], channels=chans)
-            for serial, chans in config.boards.items()
+            serial_key: _Board(serial=serial_key, tag=tags[serial_key], channels=chans)
+            for serial_key, chans in config.boards.items()
         }
         self._log:       object | None              = None
         self._datasets:  dict[str, object]          = {}
@@ -159,11 +477,14 @@ class Monitor:
         self._raw_files: dict[str, object]          = {}
         self._bytes_in    = 0
         self._samples_in  = 0
+        self._frames_received = 0
+        self._frames_dropped  = 0
         self._t_stats     = time.monotonic()
         self._last_stats  = ''
 
     def on_stream_frame(self, board: _Board, frame: StreamDataFrame) -> None:
         """Test seam: dispatch one decoded STREAM_DATA frame onto board's buffers and log."""
+        self._frames_received += 1
         ch = board.ch_id_map.get(frame.channel_id)
         if ch is None:
             return
@@ -263,15 +584,20 @@ class Monitor:
         for ch in board.channels:
             if ch.name not in board.buffers:
                 board.buffers[ch.name] = _DisplayBuffer(DISPLAY_POINTS, self._cfg.window)
+        rate = compute_sample_rate([ch.sampling_time for ch in board.channels])
         if self._log:
-            rate = compute_sample_rate([ch.sampling_time for ch in board.channels])
             for ch in board.channels:
                 key = _dataset_name(board.tag, ch.name)
                 if key in self._datasets:
                     self._datasets[key].attrs['sample_rate'] = rate
 
-        board.port    = port
-        board.session = session
+        print(f'[{board.tag}] connected on {board.port_path}, '
+              f'{len(board.channels)} channel(s) @ {rate} Sa/s per channel',
+              file=sys.stderr)
+
+        board.port       = port
+        board.session    = session
+        board.last_drops = 0
         return True
 
     def _disconnect(self, board: _Board) -> None:
@@ -294,6 +620,14 @@ class Monitor:
             self._bytes_in += len(data)
             for frame in board.session.feed(data):
                 self.on_stream_frame(board, frame)
+            current = board.session._parser.seq_drops
+            new_drops = current - board.last_drops
+            if new_drops > 0:
+                self._frames_dropped += new_drops
+                board.last_drops     = current
+                total = self._frames_received + self._frames_dropped
+                print(f'Dropped USB packet ({self._frames_dropped} of {total})',
+                      file=sys.stderr)
             return True
         except serial.SerialException:
             return False
@@ -394,6 +728,7 @@ class Monitor:
             self._close()
 
     def _run_gui(self) -> None:
+        import signal
         import pyqtgraph as pg
         from pyqtgraph.Qt import QtCore
 
@@ -405,7 +740,14 @@ class Monitor:
 
         total_rows = sum(len(b.channels) for b in self._boards.values())
 
-        pg.mkQApp('Kvasir Monitor')
+        app = pg.mkQApp('Kvasir Monitor')
+        # Qt's C event loop blocks Python's signal handling; a SIGINT handler that
+        # quits the app plus a no-op timer to yield to Python lets Ctrl+C kill the UI.
+        signal.signal(signal.SIGINT, lambda *_: app.quit())
+        sigint_timer = QtCore.QTimer()
+        sigint_timer.timeout.connect(lambda: None)
+        sigint_timer.start(100)
+
         win = pg.GraphicsLayoutWidget(title=self._window_title())
         win.resize(1200, 220 * max(1, total_rows))
 
@@ -466,6 +808,7 @@ class Monitor:
         try:
             pg.exec()
         finally:
+            sigint_timer.stop()
             read_timer.stop()
             display_timer.stop()
             self._close()
@@ -486,7 +829,7 @@ def main() -> None:
                     help='log format (default: hdf5)')
     args = ap.parse_args()
 
-    cfg = load_config(args.config)
+    cfg = load(args.config)
     if args.output:
         cfg.log = args.output
 
