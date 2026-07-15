@@ -1,7 +1,8 @@
 import struct
-from tools.monitor.session import Session, Channel
-from tools.monitor.frame_parser import StreamDataFrame
-from tools.monitor.protocol import MAGIC, FrameType, AckStatus
+from tools.monitor.monitor import (
+    Session, Channel, StreamDataFrame,
+    MAGIC, FrameType, AckStatus,
+)
 
 
 class FakePort:

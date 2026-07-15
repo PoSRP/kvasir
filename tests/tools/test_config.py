@@ -1,8 +1,7 @@
 import pathlib
 import numpy as np
 import pytest
-from tools.monitor.config import load, _num
-from tools.monitor.session import Channel
+from tools.monitor.monitor import load, _num, Channel
 
 EXAMPLE = pathlib.Path(__file__).parent / 'example.yaml'
 

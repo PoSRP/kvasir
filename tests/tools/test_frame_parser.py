@@ -1,8 +1,8 @@
 import struct
-from tools.monitor.frame_parser import (
+from tools.monitor.monitor import (
     FrameParser, StreamDataFrame, AckFrame,
+    MAGIC, FrameType,
 )
-from tools.monitor.protocol import MAGIC, FrameType
 
 
 def _frame(type_byte: int, payload: bytes) -> bytes:

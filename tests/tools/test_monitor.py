@@ -1,12 +1,10 @@
 import numpy as np
 import pytest
 
-from tools.monitor import (
+from tools.monitor.monitor import (
     _DisplayBuffer, _Board, Monitor, DISPLAY_POINTS, short_tag, compute_tags,
+    Config, Channel, StreamDataFrame,
 )
-from tools.monitor.config import Config
-from tools.monitor.session import Channel
-from tools.monitor.frame_parser import StreamDataFrame
 
 
 def _monitor_with_board(formula: str | None = None,

@@ -12,4 +12,4 @@ fi
 
 cd "$ROOT"
 export LD_LIBRARY_PATH="${NIX_LD_LIBRARY_PATH:-}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-exec "$VENV/bin/python" -m tools.monitor "$@"
+exec "$VENV/bin/python" tools/monitor/monitor.py "$@"
