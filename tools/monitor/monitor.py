@@ -102,7 +102,8 @@ class Channel:
         v = raw * (ADC_VREF / ADC_MAX_CODE)
         if self._code is None:
             return v
-        return eval(self._code, {'v': v, **_FORMULA_NAMES})
+        with np.errstate(divide='ignore', invalid='ignore'):
+            return eval(self._code, {'v': v, **_FORMULA_NAMES})
 
 
 @dataclass
@@ -727,6 +728,7 @@ class Monitor:
             self._close()
 
     def _run_gui(self) -> None:
+        import signal
         import pyqtgraph as pg
         from pyqtgraph.Qt import QtCore
 
@@ -738,7 +740,14 @@ class Monitor:
 
         total_rows = sum(len(b.channels) for b in self._boards.values())
 
-        pg.mkQApp('Kvasir Monitor')
+        app = pg.mkQApp('Kvasir Monitor')
+        # Qt's C event loop blocks Python's signal handling; a SIGINT handler that
+        # quits the app plus a no-op timer to yield to Python lets Ctrl+C kill the UI.
+        signal.signal(signal.SIGINT, lambda *_: app.quit())
+        sigint_timer = QtCore.QTimer()
+        sigint_timer.timeout.connect(lambda: None)
+        sigint_timer.start(100)
+
         win = pg.GraphicsLayoutWidget(title=self._window_title())
         win.resize(1200, 220 * max(1, total_rows))
 
@@ -799,6 +808,7 @@ class Monitor:
         try:
             pg.exec()
         finally:
+            sigint_timer.stop()
             read_timer.stop()
             display_timer.stop()
             self._close()
