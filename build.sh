@@ -11,38 +11,35 @@ help|--help|-h)
     cat <<'EOF'
 Usage: ./build.sh [command]
 
-Application firmware (slot images for the ymir bootloader):
-  build           Build firmware for slot A (default)
+Application firmware:
+  build             Build firmware for slot A (default)
                     Output: firmware/build/slot-a/kvasir.elf
-  build-b         Build firmware for slot B
+  build-b           Build firmware for slot B
                     Output: firmware/build/slot-b/kvasir.elf
-  flash [SERIAL]  Build slot-a, send DFU trigger, upload via USB CDC using
+  flash [SERIAL]    Send DFU trigger, upload the slot-a image with
                     firmware/ymir/scripts/flash_tool.sh
-                    Requires the bootloader to already be on the device.
                     SERIAL (optional) targets a specific board by its USB
                     serial number - required when multiple boards are attached.
-  flash-b [SERIAL]  Same as flash, but builds and uploads the slot B image.
+  flash-b [SERIAL]  Same as flash, but uploads the slot B image.
 
 Bootloader (one-time install with ST-Link):
-  bootloader      Build the ymir bootloader from the submodule
+  bootloader        Build the ymir bootloader from the submodule
                     Output: firmware/ymir/firmware/build/Debug/ymir.elf
-  flash-bootloader  Build bootloader, mass-erase flash, program via ST-Link + OpenOCD
+  flash-bootloader  Mass-erase flash and program the bootloader image
+                    via ST-Link + OpenOCD.
 
 Tests:
-  test            Build and run Catch2 unit tests (ring buffer, frame packer, pipeline)
-  toolstest       Run pytest for the Python monitor/logger tools (no hardware)
+  test              Build and run Catch2 unit tests (ring buffer, frame packer, pipeline)
+  toolstest         Run pytest for the Python monitor/logger tools (no hardware)
                     Tests: tests/tools/
 
 Lint:
-  tidy [FILES...] Run clang-tidy across firmware/app.
+  tidy [FILES...]   Run clang-tidy across firmware/app.
                     With no args lints every source in the compile DB.
                     With repo-relative source paths (e.g. from pre-commit)
                     lints only those.
 
-  help            Show this message
-
-All build steps run inside Docker. CPU usage is capped at (nproc - 2).
-`flash` invokes ymir/scripts/flash_tool.sh on the host (needs bash + python3).
+  help              Show this message
 EOF
     exit 0
     ;;
@@ -76,11 +73,6 @@ bootloader)
 
 flash-bootloader)
     docker build -t "$FW_IMAGE" docker/firmware
-    docker run --rm --cpus "$CPUS" \
-        -v "$(pwd):/workspace" \
-        -w /workspace/firmware/ymir/firmware/ymir \
-        "$FW_IMAGE" \
-        bash -c "cmake --fresh --preset Debug && cmake --build --preset Debug -j ${CPUS}"
     docker run --rm \
         -v "$(pwd):/workspace" \
         --privileged -v /dev/bus/usb:/dev/bus/usb \
@@ -97,12 +89,6 @@ flash-bootloader)
     ;;
 
 flash)
-    docker build -t "$FW_IMAGE" docker/firmware
-    docker run --rm --cpus "$CPUS" \
-        -v "$(pwd):/workspace" \
-        -w /workspace/firmware \
-        "$FW_IMAGE" \
-        bash -c "cmake --fresh --preset slot-a && cmake --build build/slot-a -j ${CPUS}"
     SERIAL_ARGS=()
     if [[ -n "${2:-}" ]]; then
         SERIAL_ARGS=(--serial "$2")
@@ -112,12 +98,6 @@ flash)
     ;;
 
 flash-b)
-    docker build -t "$FW_IMAGE" docker/firmware
-    docker run --rm --cpus "$CPUS" \
-        -v "$(pwd):/workspace" \
-        -w /workspace/firmware \
-        "$FW_IMAGE" \
-        bash -c "cmake --fresh --preset slot-b && cmake --build build/slot-b -j ${CPUS}"
     SERIAL_ARGS=()
     if [[ -n "${2:-}" ]]; then
         SERIAL_ARGS=(--serial "$2")
